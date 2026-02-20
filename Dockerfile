@@ -1,5 +1,5 @@
 FROM node:18-slim AS deps
-RUN apt-get install --no-cache libc6-compat
+RUN apt-get update && apt-get install -y --no-install-recommends libc6-compat && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json ./
 RUN npm install
