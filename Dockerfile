@@ -1,7 +1,13 @@
 FROM node:18-slim AS deps
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY package.json ./
-RUN npm install
+RUN npm cache clean --force && npm install
 
 FROM node:18-slim AS builder
 WORKDIR /app
