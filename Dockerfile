@@ -1,5 +1,5 @@
 FROM node:18-slim AS deps
-RUN apk add --no-cache libc6-compat
+RUN apt-get install --no-cache libc6-compat
 WORKDIR /app
 COPY package.json ./
 RUN npm install
