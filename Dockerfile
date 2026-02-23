@@ -7,15 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json* ./
 
-RUN if [ -f package-lock.json ]; then \
-      npm ci --unsafe-perm --no-audit --prefer-offline; \
-    else \
-      npm install --unsafe-perm --no-audit --prefer-offline; \
-    fi
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --unsafe-perm --no-audit --prefer-offline
 
-FROM node:18-slim AS builder
+FROM node:24-slim AS builder
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
@@ -24,10 +21,11 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 # NPM_CONFIG_OPTIONAL=false
 
-RUN npm run build
+RUN --mount=type=cache,target=/app/.next/cache \
+    npm run build
 
 # Stage: runner
-FROM node:18-slim AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
