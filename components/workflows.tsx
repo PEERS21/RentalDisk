@@ -155,7 +155,7 @@ const QrScannerButton = ({ bookings, revert_flag }: { bookings: Booking[]; rever
           <TG.Modal.Header>{nextBooking.disk_name}</TG.Modal.Header>
           <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
             <div style={{ width: '250px', height: '250px', borderRadius: '40px', overflow: 'hidden', border: '4px solid var(--tgui--link_color)', background: '#000' }}>
-              {isOpen && <CameraStream wsUrl="/ws/upload" diskName={nextBooking.disk_name} revert_flagv={revert_flag}/>}
+              {isOpen && <CameraStream wsUrl="/api/ws/upload" diskName={nextBooking.disk_name} revert_flagv={revert_flag}/>}
             </div>
             <p style={{ marginTop: '16px', color: 'gray' }}>Наведите камеру на QR код</p>
           </div>
@@ -180,7 +180,7 @@ export default function Workflows() {
   const [value, setValue] = useState('');
 
   useEffect(() => {
-    fetch('/verify', {
+    fetch('/auth/verify', {
       method: 'GET',
       credentials: 'include'
     })
@@ -189,12 +189,12 @@ export default function Workflows() {
             setIsAuthorized(true);
           } else {
             // Если 401 или любая другая ошибка — на выход
-            window.location.href = '/login';
+            window.location.href = '/auth/login';
           }
         })
         .catch(() => {
           // Ошибка сети или сервер лежит
-          window.location.href = '/login';
+          window.location.href = '/auth/login';
         })
         .finally(() => setLoading(false));
   }, []);

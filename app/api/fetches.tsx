@@ -29,7 +29,7 @@ export const DEFAULT_DISK_ITEM: DiskItem = {
 };
 
 // Hook для клиентского использования
-export function useDisks(url = "/items") {
+export function useDisks(url = "/api/items") {
     const [data, setData] = useState<DiskItem[]>([]);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<Error | null>(null);
