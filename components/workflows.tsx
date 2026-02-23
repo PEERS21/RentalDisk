@@ -180,7 +180,7 @@ export default function Workflows() {
   const [value, setValue] = useState('');
 
   useEffect(() => {
-    fetch('/auth/verify', {
+    fetch('https://tamelaos.fun/auth/verify', {
       method: 'GET',
       credentials: 'include'
     })
@@ -189,12 +189,12 @@ export default function Workflows() {
             setIsAuthorized(true);
           } else {
             // Если 401 или любая другая ошибка — на выход
-            window.location.href = '/auth/login';
+            window.location.href = 'https://tamelaos.fun/auth/login';
           }
         })
         .catch(() => {
           // Ошибка сети или сервер лежит
-          window.location.href = '/auth/login';
+          window.location.href = 'https://tamelaos.fun/auth/login';
         })
         .finally(() => setLoading(false));
   }, []);
