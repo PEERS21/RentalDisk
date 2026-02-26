@@ -15,6 +15,9 @@ import { useDisks, DEFAULT_DISK_ITEM, type DiskItem, useOccupiedRanges } from "@
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import utc from 'dayjs/plugin/utc';
 import {Icon24QR} from "@telegram-apps/telegram-ui/dist/icons/24/qr";
+import jsQR from "jsqr";
+
+const COOLDOWN_MS = 5000;
 
 // Подключаем плагин для работы с UTC
 dayjs.extend(utc);
@@ -22,6 +25,12 @@ dayjs.extend(utc);
 function intervalsOverlap(aStart: Dayjs, aEnd: Dayjs, bStart: Dayjs, bEnd: Dayjs) {
   return aStart.isBefore(bEnd) && aEnd.isAfter(bStart);
 }
+
+export const DEFAULT_BOOKING_ITEM: Booking = {
+    id: -1,
+    disk_name: "loading...",
+    start_ts: Math.floor(Date.now() / 1000) + 30 * 60
+};
 
 interface Booking {
   id: number;
@@ -46,6 +55,10 @@ interface CameraStreamProps {
 const CameraStream = ({ wsUrl, diskName, revert_flagv }: CameraStreamProps) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const detectorRef = useRef<any | null>(null);
+  const lastSentAtRef = useRef<number>(0);
+  const lastCodeRef = useRef<string | null>(null);
+  const scanningRef = useRef<boolean>(true);
 
   useEffect(() => {
     // Формируем URL с логином
@@ -85,6 +98,20 @@ const CameraStream = ({ wsUrl, diskName, revert_flagv }: CameraStreamProps) => {
       } catch (e) { console.error(e); }
     };
 
+    if ((window as any).BarcodeDetector) {
+      try {
+        const supportedFormats = ["qr_code"];
+        // TS может не знать тип BarcodeDetector, используем any
+        const BarcodeDetectorCtor = (window as any).BarcodeDetector;
+        detectorRef.current = new BarcodeDetectorCtor({ formats: supportedFormats });
+      } catch (err) {
+        console.warn("BarcodeDetector init failed, fallback to jsQR", err);
+        detectorRef.current = null;
+      }
+    } else {
+      detectorRef.current = null; // будем использовать jsQR
+    }
+
     const startCamera = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
@@ -94,22 +121,68 @@ const CameraStream = ({ wsUrl, diskName, revert_flagv }: CameraStreamProps) => {
 
     startCamera();
 
-    const intervalId = setInterval(() => {
-      if (!videoRef.current || ws.readyState !== WebSocket.OPEN) return;
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0);
-        canvas.toBlob((blob) => {
-          if (blob) {
-            ws.send(blob);
-            ws.send(JSON.stringify({ type: "end" }));
+    const SCAN_INTERVAL = 500;
+
+    const intervalId = setInterval(async () => {
+      const video = videoRef.current;
+      const wsNow = wsRef.current;
+      if (!video || !wsNow || wsNow.readyState !== WebSocket.OPEN) return;
+      if (!scanningRef.current) return;
+
+      // Обрезаем кадр в canvas
+      const canvas = document.createElement("canvas");
+      const w = video.videoWidth;
+      const h = video.videoHeight;
+      if (!w || !h) return;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, w, h);
+
+      try {
+        if (detectorRef.current) {
+          const bitmap = await createImageBitmap(canvas);
+          const results = await detectorRef.current.detect(bitmap);
+          bitmap.close();
+          if (results && results.length > 0) {
+            const codeValue = results[0].rawValue ?? results[0].rawData ?? "";
+            const now = Date.now();
+            if (codeValue && (now - lastSentAtRef.current > COOLDOWN_MS || codeValue !== lastCodeRef.current)) {
+              lastSentAtRef.current = now;
+              lastCodeRef.current = codeValue;
+              canvas.toBlob((blob) => {
+                if (blob && wsNow.readyState === WebSocket.OPEN) {
+                  wsNow.send(blob);
+                  wsNow.send(JSON.stringify({ type: "end" }));
+                  // scanningRef.current = false;
+                }
+              }, "image/jpeg", 0.7);
+            }
           }
-        }, 'image/jpeg', 0.7);
+        } else {
+          const imageData = ctx.getImageData(0, 0, w, h);
+          const code = jsQR(imageData.data, w, h);
+          if (code?.data) {
+            const codeValue = code.data;
+            const now = Date.now();
+            if (codeValue && (now - lastSentAtRef.current > COOLDOWN_MS || codeValue !== lastCodeRef.current)) {
+              lastSentAtRef.current = now;
+              lastCodeRef.current = codeValue;
+              canvas.toBlob((blob) => {
+                if (blob && wsNow.readyState === WebSocket.OPEN) {
+                  wsNow.send(blob);
+                  wsNow.send(JSON.stringify({ type: "end" }));
+                  // scanningRef.current = false;
+                }
+              }, "image/jpeg", 0.7);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("QR detection error:", err);
       }
-    }, 1000);
+    }, SCAN_INTERVAL);
 
     return () => {
       clearInterval(intervalId);
@@ -168,12 +241,14 @@ export default function Workflows() {
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [loading_auth, setLoading] = useState(true);
   const { data, loading, error } = useDisks();
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [bookings_revert, setBookings_revert] = useState<Booking[]>([]);
+  const [bookings, setBookings] = useState<Booking[]>([DEFAULT_BOOKING_ITEM]);
+  const [bookings_revert, setBookings_revert] = useState<Booking[]>([DEFAULT_BOOKING_ITEM]);
 
   let testimonials: DiskItem[] = [];
   if (loading) testimonials = [DEFAULT_DISK_ITEM];
   else testimonials = data.length > 0 ? data : [];
+
+  testimonials = [DEFAULT_DISK_ITEM]; //DEBUG
 
   const masonryContainer = useMasonry();
   const [category, setCategory] = useState<number>(1);
@@ -189,12 +264,14 @@ export default function Workflows() {
             setIsAuthorized(true);
           } else {
             // Если 401 или любая другая ошибка — на выход
-            window.location.href = 'https://tamelaos.fun/auth/login';
+            //window.location.href = 'https://tamelaos.fun/auth/login'; // DEBUG
+            setIsAuthorized(true); // DEBUG
           }
         })
         .catch(() => {
           // Ошибка сети или сервер лежит
-          window.location.href = 'https://tamelaos.fun/auth/login';
+          //window.location.href = 'https://tamelaos.fun/auth/login'; // DEBUG
+          setIsAuthorized(true); // DEBUG
         })
         .finally(() => setLoading(false));
   }, []);
@@ -378,18 +455,20 @@ export default function Workflows() {
 
           <div className="border-t py-12 [border-image:linear-gradient(to_right,transparent,--theme(--color-slate-400/.25),transparent)1] md:py-20">
             {/* Cards */}
-            <div
-                className="mx-auto grid max-w-sm items-start gap-6 sm:max-w-none sm:grid-cols-2 lg:grid-cols-3"
+            <div className="mx-auto my-0 grid gap-6" 
+                style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', maxWidth: '1400px' }}
                 ref={masonryContainer}
             >
-              {filteredTestimonials.map((testimonial, index) => (
-                    <div key={index} className="group">
-                      <Spotlight className="group mx-auto grid max-w-sm items-start gap-6 lg:max-w-none lg:grid-cols-3">
-                        <Testimonial testimonial={testimonial} category={category}>
-                          {testimonial.content}
-                        </Testimonial>
-                      </Spotlight>
+              {filteredTestimonials.map((t, i) => (
+                <div key={i} className="group">
+                  <Spotlight className="w-full">
+                    <div className="w-full aspect-[4/3] md:aspect-[16/9] p-4 min-h-[450px] max-h-[460px]">
+                      <Testimonial testimonial={t} category={category}>
+                        {t.content}
+                      </Testimonial>
                     </div>
+                  </Spotlight>
+                </div>
               ))}
             </div>
           </div>
@@ -537,10 +616,10 @@ export function Testimonial({
               {/* Image */}
               <img
                   className="inline-flex"
-                  src={`/static/images/${testimonial.client_img_filename}`}
+                  src={`/public/images/${testimonial.client_img_filename}`}
                   width={350}
                   height={288}
-                  alt="/static/images/logo.svg"
+                  alt="/public/images/logo.svg"
               />
               {/* Content */}
               <div className="p-6">
